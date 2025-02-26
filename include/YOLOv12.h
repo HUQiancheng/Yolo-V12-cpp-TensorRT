@@ -49,6 +49,9 @@ private:
     // Initialize the TensorRT engine from a serialized model file
     void init(std::string engine_path, nvinfer1::ILogger& logger);
 
+    float d2s_[6]; //保存预处理时计算的逆仿射矩阵
+    float scale_;  // 保存预处理时计算的缩放比例
+
     // Device (GPU) buffers for input and output
     float* gpu_buffers[2];  //!< Input and output buffers allocated on the GPU
 
@@ -78,10 +81,10 @@ private:
     const int MAX_IMAGE_SIZE = 4096 * 4096;
 
     // Confidence threshold for filtering detections
-    float conf_threshold = 0.001f;
+    float conf_threshold = 0.3f;
 
     // Non-Maximum Suppression (NMS) threshold to remove duplicate boxes
-    float nms_threshold = 0.2f;
+    float nms_threshold = 0.3f;
 
     // Colors for drawing bounding boxes for each class
     vector<Scalar> colors;

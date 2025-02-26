@@ -98,10 +98,12 @@ __global__ void warpaffine_kernel(
 }
 
 // Host-side preprocessing function
+// 修改函数签名，增加 out_d2s 与 out_scale 输出参数
 void cuda_preprocess(
     uint8_t* src, int src_width, int src_height,
     float* dst, int dst_width, int dst_height,
-    cudaStream_t stream) {
+    cudaStream_t stream,
+    float* out_d2s, float* out_scale) {
 
     int img_size = src_width * src_height * 3;
 
@@ -129,29 +131,34 @@ void cuda_preprocess(
     CUDA_CALL(cudaStreamSynchronize(stream));
 
     // Prepare the affine matrices
+    // Prepare the affine matrices
     AffineMatrix s2d, d2s;
+    // 这里采用 letterbox（min 缩放因子）或者根据需求调整为 center-crop（max 缩放因子）
     float scale = std::min(dst_height / (float)src_height, dst_width / (float)src_width);
 
     s2d.value[0] = scale; s2d.value[1] = 0;
-    s2d.value[2] = -scale * src_width * 0.5 + dst_width * 0.5;
+    s2d.value[2] = -scale * src_width * 0.5f + dst_width * 0.5f;
     s2d.value[3] = 0; s2d.value[4] = scale;
-    s2d.value[5] = -scale * src_height * 0.5 + dst_height * 0.5;
+    s2d.value[5] = -scale * src_height * 0.5f + dst_height * 0.5f;
 
     cv::Mat m2x3_s2d(2, 3, CV_32F, s2d.value);
     cv::Mat m2x3_d2s(2, 3, CV_32F, d2s.value);
     cv::invertAffineTransform(m2x3_s2d, m2x3_d2s);
     memcpy(d2s.value, m2x3_d2s.ptr<float>(0), sizeof(d2s.value));
 
+    // 将计算得到的 d2s 与 scale 返回给调用者
+    memcpy(out_d2s, d2s.value, 6 * sizeof(float));
+    *out_scale = scale;
+
     int jobs = dst_width * dst_height;
     int threads = 256;
     int blocks = (jobs + threads - 1) / threads;
-
+    
     // Launch the kernel
     warpaffine_kernel<<<blocks, threads, 0, stream>>>(
         img_buffer_device, src_width * 3, src_width, src_height,
         dst, dst_width, dst_height, 128, d2s, jobs);
-
-    // Synchronize and check for errors
+    
     CUDA_CALL(cudaStreamSynchronize(stream));
 }
 

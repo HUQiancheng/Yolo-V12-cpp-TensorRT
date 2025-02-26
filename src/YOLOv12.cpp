@@ -17,20 +17,21 @@
 #include <fstream>
 #include <iostream>
 
-
 static Logger logger;
 #define isFP16 true
 #define warmup true
 
-
-YOLOv12::YOLOv12(string model_path, nvinfer1::ILogger& logger){
+YOLOv12::YOLOv12(string model_path, nvinfer1::ILogger &logger)
+{
     // Deserialize an engine
-    if (model_path.find(".onnx") == std::string::npos){
+    if (model_path.find(".onnx") == std::string::npos)
+    {
         init(model_path, logger);
     }
 
     // Build an engine from an onnx model
-    else{
+    else
+    {
         build(model_path, logger);
         saveEngine(model_path);
     }
@@ -47,8 +48,8 @@ YOLOv12::YOLOv12(string model_path, nvinfer1::ILogger& logger){
 #endif
 }
 
-
-void YOLOv12::init(std::string engine_path, nvinfer1::ILogger& logger){
+void YOLOv12::init(std::string engine_path, nvinfer1::ILogger &logger)
+{
     // Read the engine file
     ifstream engineStream(engine_path, ios::binary);
     engineStream.seekg(0, ios::end);
@@ -63,33 +64,29 @@ void YOLOv12::init(std::string engine_path, nvinfer1::ILogger& logger){
     engine = runtime->deserializeCudaEngine(engineData.get(), modelSize);
     context = engine->createExecutionContext();
 
+#if NV_TENSORRT_MAJOR < 8
+    input_h = engine->getBindingDimensions(0).d[2];
+    input_w = engine->getBindingDimensions(0).d[3];
+    detection_attribute_size = engine->getBindingDimensions(1).d[1];
+    num_detections = engine->getBindingDimensions(1).d[2];
+#else
+    auto input_name = engine->getIOTensorName(0);
+    auto output_name = engine->getIOTensorName(1);
 
-    #if NV_TENSORRT_MAJOR < 8
-        input_h = engine->getBindingDimensions(0).d[2];
-        input_w = engine->getBindingDimensions(0).d[3];
-        detection_attribute_size = engine->getBindingDimensions(1).d[1];
-        num_detections = engine->getBindingDimensions(1).d[2];
-    #else
-        auto input_name = engine->getIOTensorName(0);
-        auto output_name = engine->getIOTensorName(1);
+    auto input_dims = engine->getTensorShape(input_name);
+    auto output_dims = engine->getTensorShape(output_name);
 
-        auto input_dims = engine->getTensorShape(input_name);
-        auto output_dims = engine->getTensorShape(output_name);
-
-        input_h = input_dims.d[2];
-        input_w = input_dims.d[3];
-        detection_attribute_size = output_dims.d[1];
-        num_detections = output_dims.d[2];
-    #endif
-        num_classes = detection_attribute_size - 4;
-
-
-
+    input_h = input_dims.d[2];
+    input_w = input_dims.d[3];
+    detection_attribute_size = output_dims.d[1];
+    num_detections = output_dims.d[2];
+#endif
+    num_classes = detection_attribute_size - 4;
 
     // Initialize input buffers
     cpu_output_buffer = new float[detection_attribute_size * num_detections];
     CUDA_CHECK(cudaMalloc(&gpu_buffers[0], 3 * input_w * input_h * sizeof(float)));
-   
+
     // Initialize output buffer
     CUDA_CHECK(cudaMalloc(&gpu_buffers[1], detection_attribute_size * num_detections * sizeof(float)));
 
@@ -97,16 +94,18 @@ void YOLOv12::init(std::string engine_path, nvinfer1::ILogger& logger){
 
     CUDA_CHECK(cudaStreamCreate(&stream));
 
-
-    if (warmup) {
-        for (int i = 0; i < 10; i++) {
+    if (warmup)
+    {
+        for (int i = 0; i < 10; i++)
+        {
             this->infer();
         }
         printf("model warmup 10 times\n");
     }
 }
 
-YOLOv12::~YOLOv12(){
+YOLOv12::~YOLOv12()
+{
     // Release stream and buffers
     CUDA_CHECK(cudaStreamSynchronize(stream));
     CUDA_CHECK(cudaStreamDestroy(stream));
@@ -121,31 +120,43 @@ YOLOv12::~YOLOv12(){
     delete runtime;
 }
 
-void YOLOv12::preprocess(Mat& image) {
-    // Preprocessing data on gpu
-    cuda_preprocess(image.ptr(), image.cols, image.rows, gpu_buffers[0], input_w, input_h, stream);
+void YOLOv12::preprocess(Mat &image)
+{
+    // 调用预处理函数，同时传入成员变量地址保存 d2s_ 与 scale_
+    cuda_preprocess(image.ptr(),
+                    image.cols,
+                    image.rows,
+                    gpu_buffers[0],
+                    input_w,
+                    input_h,
+                    stream,
+                    d2s_,     // 保存逆仿射矩阵
+                    &scale_); // 保存缩放比例
     CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
-void YOLOv12::infer(){
-// Register the input and output buffers
-const char* input_name = engine->getIOTensorName(0);
-const char* output_name = engine->getIOTensorName(1);
+void YOLOv12::infer()
+{
+    // Register the input and output buffers
+    const char *input_name = engine->getIOTensorName(0);
+    const char *output_name = engine->getIOTensorName(1);
 
-// Set the input tensor address
-context->setTensorAddress(input_name, gpu_buffers[0]);
-context->setTensorAddress(output_name, gpu_buffers[1]);
+    // Set the input tensor address
+    context->setTensorAddress(input_name, gpu_buffers[0]);
+    context->setTensorAddress(output_name, gpu_buffers[1]);
 
 #if NV_TENSORRT_MAJOR < 10
-    context->enqueueV2((void**)gpu_buffers, stream, nullptr);
+    context->enqueueV2((void **)gpu_buffers, stream, nullptr);
 #else
     this->context->enqueueV3(this->stream);
 #endif
 }
-
-void YOLOv12::postprocess(vector<Detection>& output){
-    // Memcpy from device output buffer to host output buffer
-    CUDA_CHECK(cudaMemcpyAsync(cpu_output_buffer, gpu_buffers[1], num_detections * detection_attribute_size * sizeof(float), cudaMemcpyDeviceToHost, stream));
+void YOLOv12::postprocess(vector<Detection> &output)
+{
+    // 从设备输出复制到 host
+    CUDA_CHECK(cudaMemcpyAsync(cpu_output_buffer, gpu_buffers[1],
+                               num_detections * detection_attribute_size * sizeof(float),
+                               cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     vector<Rect> boxes;
@@ -154,22 +165,34 @@ void YOLOv12::postprocess(vector<Detection>& output){
 
     const Mat det_output(detection_attribute_size, num_detections, CV_32F, cpu_output_buffer);
 
-    for (int i = 0; i < det_output.cols; ++i) {
+    for (int i = 0; i < det_output.cols; ++i)
+    {
         const Mat classes_scores = det_output.col(i).rowRange(4, 4 + num_classes);
         Point class_id_point;
         double score;
         minMaxLoc(classes_scores, nullptr, &score, nullptr, &class_id_point);
 
-        if (score > conf_threshold) {
-            const float cx = det_output.at<float>(0, i);
-            const float cy = det_output.at<float>(1, i);
-            const float ow = det_output.at<float>(2, i);
-            const float oh = det_output.at<float>(3, i);
+        if (score > conf_threshold)
+        {
+            // 模型输出的坐标在预处理（模型输入）空间内
+            float cx = det_output.at<float>(0, i);
+            float cy = det_output.at<float>(1, i);
+            float ow = det_output.at<float>(2, i);
+            float oh = det_output.at<float>(3, i);
+
+            // 利用事先保存的逆仿射矩阵 d2s_ 将坐标映射回原图：
+            // 注意：d2s_ 对于位置坐标的转换：o = d2s_[0-1]*c + d2s_[2/5]
+            float orig_cx = d2s_[0] * cx + d2s_[1] * cy + d2s_[2];
+            float orig_cy = d2s_[3] * cx + d2s_[4] * cy + d2s_[5];
+            // 对于宽高，由于仅使用缩放和位移（平移不影响尺度），可以直接用 scale_ 转换
+            float orig_w = ow / scale_;
+            float orig_h = oh / scale_;
+
             Rect box;
-            box.x = static_cast<int>((cx - 0.5 * ow));
-            box.y = static_cast<int>((cy - 0.5 * oh));
-            box.width = static_cast<int>(ow);
-            box.height = static_cast<int>(oh);
+            box.x = static_cast<int>(orig_cx - 0.5f * orig_w);
+            box.y = static_cast<int>(orig_cy - 0.5f * orig_h);
+            box.width = static_cast<int>(orig_w);
+            box.height = static_cast<int>(orig_h);
 
             boxes.push_back(box);
             class_ids.push_back(class_id_point.y);
@@ -180,7 +203,8 @@ void YOLOv12::postprocess(vector<Detection>& output){
     vector<int> nms_result;
     dnn::NMSBoxes(boxes, confidences, conf_threshold, nms_threshold, nms_result);
 
-    for (int i = 0; i < nms_result.size(); i++){
+    for (int i = 0; i < nms_result.size(); i++)
+    {
         Detection result;
         int idx = nms_result[i];
         result.class_id = class_ids[idx];
@@ -189,20 +213,21 @@ void YOLOv12::postprocess(vector<Detection>& output){
         output.push_back(result);
     }
 }
-
-void YOLOv12::build(std::string onnxPath, nvinfer1::ILogger& logger){
+void YOLOv12::build(std::string onnxPath, nvinfer1::ILogger &logger)
+{
     auto builder = createInferBuilder(logger);
     const auto explicitBatch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
-    INetworkDefinition* network = builder->createNetworkV2(explicitBatch);
-    IBuilderConfig* config = builder->createBuilderConfig();
-    
-    if (isFP16){
+    INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
+    IBuilderConfig *config = builder->createBuilderConfig();
+
+    if (isFP16)
+    {
         config->setFlag(BuilderFlag::kFP16);
     }
 
-    nvonnxparser::IParser* parser = nvonnxparser::createParser(*network, logger);
+    nvonnxparser::IParser *parser = nvonnxparser::createParser(*network, logger);
     bool parsed = parser->parseFromFile(onnxPath.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kINFO));
-    IHostMemory* plan{ builder->buildSerializedNetwork(*network, *config) };
+    IHostMemory *plan{builder->buildSerializedNetwork(*network, *config)};
 
     runtime = createInferRuntime(logger);
 
@@ -216,27 +241,32 @@ void YOLOv12::build(std::string onnxPath, nvinfer1::ILogger& logger){
     delete plan;
 }
 
-bool YOLOv12::saveEngine(const std::string& onnxpath){
+bool YOLOv12::saveEngine(const std::string &onnxpath)
+{
     // Create an engine path from onnx path
     std::string engine_path;
     size_t dotIndex = onnxpath.find_last_of(".");
-    if (dotIndex != std::string::npos){
+    if (dotIndex != std::string::npos)
+    {
         engine_path = onnxpath.substr(0, dotIndex) + ".engine";
     }
-    else{
+    else
+    {
         return false;
     }
 
     // Save the engine to the path
-    if (engine){
-        nvinfer1::IHostMemory* data = engine->serialize();
+    if (engine)
+    {
+        nvinfer1::IHostMemory *data = engine->serialize();
         std::ofstream file;
         file.open(engine_path, std::ios::binary | std::ios::out);
-        if (!file.is_open()){
+        if (!file.is_open())
+        {
             std::cout << "Create engine file" << engine_path << " failed" << std::endl;
             return 0;
         }
-        file.write((const char*)data->data(), data->size());
+        file.write((const char *)data->data(), data->size());
         file.close();
 
         delete data;
@@ -244,24 +274,28 @@ bool YOLOv12::saveEngine(const std::string& onnxpath){
     return true;
 }
 
-void YOLOv12::draw(Mat& image, const vector<Detection>& output){
+void YOLOv12::draw(Mat &image, const vector<Detection> &output)
+{
     const float ratio_h = input_h / (float)image.rows;
     const float ratio_w = input_w / (float)image.cols;
 
-    for (int i = 0; i < output.size(); i++){
+    for (int i = 0; i < output.size(); i++)
+    {
         auto detection = output[i];
         auto box = detection.bbox;
         auto class_id = detection.class_id;
         auto conf = detection.conf;
         cv::Scalar color = cv::Scalar(COLORS[class_id][0], COLORS[class_id][1], COLORS[class_id][2]);
 
-        if (ratio_h > ratio_w){
+        if (ratio_h > ratio_w)
+        {
             box.x = box.x / ratio_w;
             box.y = (box.y - (input_h - ratio_w * image.rows) / 2) / ratio_w;
             box.width = box.width / ratio_w;
             box.height = box.height / ratio_w;
         }
-        else{
+        else
+        {
             box.x = (box.x - (input_w - ratio_h * image.cols) / 2) / ratio_h;
             box.y = box.y / ratio_h;
             box.width = box.width / ratio_h;
