@@ -2,6 +2,8 @@
 ![Inference Time of YOLOv12 ](asset/Yolo_v12_cpp_tenosrrt.PNG)
 ![Inference Time of YOLOv12 ](asset/Results-2.gif)
 
+---
+![Inference from Laptop WebCam](asset/output.gif)
 <a href="https://github.com/hamdiboukamcha/Yolo-V12-cpp-TensorRT" style="margin: 0 2px;">
     <img src="https://img.shields.io/badge/GitHub-Repo-blue?style=flat&logo=GitHub" alt="GitHub">
 </a>
@@ -9,6 +11,8 @@
 <a href="https://github.com/yourusername/YOLOv12-TensorRT/blob/main/LICENSE" style="margin: 0 2px;">
     <img src="https://img.shields.io/badge/License-MIT-lightgreen?style=flat&logo=License" alt="License">
 </a>
+
+
 
 ## 📜 Citation
 

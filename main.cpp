@@ -92,6 +92,19 @@ int main(int argc, char *argv[])
         VideoCap videoCap(cameraId, 640, 480, 30);
         videoCap.start();
 
+        // 初始化 VideoWriter 保存视频（可选格式与编码器根据需求调整）
+        // 注意：这里先捕获一帧确定尺寸，或者提前知道分辨率
+        cv::Mat initFrame;
+        while (!videoCap.getFrame(initFrame)) { } // 保证至少获得一帧
+        Size frameSize = initFrame.size();
+        double fps = 30.0; // 根据摄像头设置
+        VideoWriter writer("output.avi", VideoWriter::fourcc('M','J','P','G'), fps, frameSize);
+        if (!writer.isOpened())
+        {
+            std::cerr << RED_COLOR << "Failed to open VideoWriter" << RESET_COLOR << std::endl;
+            return 1;
+        }
+
         // 主处理循环
         std::atomic<bool> running{ true };
         while (running)
@@ -124,20 +137,20 @@ int main(int argc, char *argv[])
                 double t_post = std::chrono::duration<double, std::milli>(end_post - start_post).count();
                 double t_total = t_pre + t_inf + t_post;
                 
-                // 在终端更新处理时间信息（覆盖上一行输出）
+                // 更新终端处理时间（覆盖同一行输出）
                 std::cout << "\rPre: " << static_cast<int>(t_pre) << "ms | "
                           << "Inf: " << static_cast<int>(t_inf) << "ms | "
                           << "Post: " << static_cast<int>(t_post) << "ms | "
                           << "Total: " << static_cast<int>(t_total) << "ms" << std::flush;
                 
-                // 如果没有检测到目标，则提示 "No detections"
+                // 若无检测目标，显示提示
                 if (detections.empty())
                 {
                     cv::putText(frame, "No detections", cv::Point(10, 50),
                                 cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
                 }
                 
-                // 绘制检测框与标签
+                // 绘制检测框和标签
                 for (const auto &det : detections)
                 {
                     int clsID = det.class_id;
@@ -161,11 +174,14 @@ int main(int argc, char *argv[])
                 }
                 
                 auto end = std::chrono::steady_clock::now();
-                float fps = 1000.0f / std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-                cv::putText(frame, "FPS: " + std::to_string(static_cast<int>(fps)),
+                float currFps = 1000.0f / std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                cv::putText(frame, "FPS: " + std::to_string(static_cast<int>(currFps)),
                             cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
                 
                 cv::imshow("YOLOv12 Real-time Detection", frame);
+                
+                // 保存视频帧
+                writer.write(frame);
             }
             catch (const std::exception &e)
             {
@@ -174,12 +190,14 @@ int main(int argc, char *argv[])
                 running = false;
             }
             
-            if (cv::waitKey(1) == 'q')
+            // 用户按 'q' 键或窗口被关闭时终止
+            if (cv::waitKey(1) == 'q' || cv::getWindowProperty("YOLOv12 Real-time Detection", WND_PROP_AUTOSIZE) < 0)
                 running = false;
         }
         
         // Cleanup
         videoCap.stop();
+        writer.release(); // 保存并关闭视频文件
         cv::destroyAllWindows();
     }
     catch (const std::exception &e)
