@@ -78,10 +78,10 @@ private:
     const int MAX_IMAGE_SIZE = 4096 * 4096;
 
     // Confidence threshold for filtering detections
-    float conf_threshold = 0.3f;
+    float conf_threshold = 0.001f;
 
     // Non-Maximum Suppression (NMS) threshold to remove duplicate boxes
-    float nms_threshold = 0.4f;
+    float nms_threshold = 0.2f;
 
     // Colors for drawing bounding boxes for each class
     vector<Scalar> colors;

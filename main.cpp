@@ -1,188 +1,205 @@
-﻿/**
- * @brief       Implementation of YOLOv12 inference using TensorRT.
- *
- * @author      Hamdi Boukamcha
- * @date        2025-02-22
- * @version     1.0
- *
- * @copyright   (c) 2025, Hamdi Boukamcha. All rights reserved.
- */
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
-
-#include <iostream>
+﻿#include <iostream>
 #include <string>
-#include "yolov12.h"
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <chrono>
+#include <fstream>
+#include <cuda_runtime.h>
+#include "include/YOLOv12.h"
+#include "include/common.h"  // Contains CLASS_NAMES and COLORS
 
-
-
-/**
- * @brief Setting up Tensorrt logger
-*/
 class Logger : public nvinfer1::ILogger {
     void log(Severity severity, const char* msg) noexcept override {
-        // Only output logs with severity greater than warning
         if (severity <= Severity::kWARNING)
             std::cout << msg << std::endl;
     }
 }logger;
 
-
 int main(int argc, char* argv[]) {
-
-    // Define color codes for terminal output
+    // Console text colors
     const std::string RED_COLOR = "\033[31m";
     const std::string GREEN_COLOR = "\033[32m";
     const std::string YELLOW_COLOR = "\033[33m";
     const std::string RESET_COLOR = "\033[0m";
 
-    // Check for valid number of arguments
-    if (argc < 4 || argc > 5) {
-        std::cerr << RED_COLOR << "Usage: " << RESET_COLOR << argv[0]
-            << " <mode> <input_path> <engine_path> [onnx_path]" << std::endl;
-        std::cerr << YELLOW_COLOR << "  <mode> - Mode of operation: 'convert', 'infer_video', or 'infer_image'" << RESET_COLOR << std::endl;
-        std::cerr << YELLOW_COLOR << "  <input_path> - Path to the input video/image or ONNX model" << RESET_COLOR << std::endl;
-        std::cerr << YELLOW_COLOR << "  <engine_path> - Path to the TensorRT engine file" << RESET_COLOR << std::endl;
-        std::cerr << YELLOW_COLOR << "  [onnx_path] - Path to the ONNX model (only for 'convert' mode)" << RESET_COLOR << std::endl;
+    if (argc != 3) {
+        std::cerr << RED_COLOR << "Usage: " << argv[0] << " <engine_path> <camera_id>" 
+                  << RESET_COLOR << std::endl;
         return 1;
     }
 
-    // Parse command-line arguments
-    std::string mode = argv[1];
-    std::string inputPath =  argv[2];
-    std::string enginePath = argv[3];
-    std::string onnxPath;
+    std::string enginePath = argv[1];
+    int cameraId = std::stoi(argv[2]);
 
-    // Validate mode and arguments
-    if (mode == "convert") {
-        if (argc != 5) {  // 'convert' requires onnx_path
-            std::cerr << RED_COLOR << "Usage for conversion: " << RESET_COLOR << argv[0]
-                << " convert <onnx_path> <engine_path>" << std::endl;
-            return 1;
-        }
-        onnxPath = inputPath;  // In 'convert' mode, inputPath is actually onnx_path
-    }
-    else if (mode == "infer_video" || mode == "infer_image") {
-        if (argc != 4) {
-            std::cerr << RED_COLOR << "Usage for " << mode << ": " << RESET_COLOR << argv[0]
-                << " " << mode << " <input_path> <engine_path>" << std::endl;
-            return 1;
-        }
-    }
-    else {
-        std::cerr << RED_COLOR << "Invalid mode. Use 'convert', 'infer_video', or 'infer_image'." << RESET_COLOR << std::endl;
+    // Check for available CUDA devices
+    int deviceCount = 0;
+    cudaGetDeviceCount(&deviceCount);
+    if (deviceCount == 0) {
+        std::cerr << RED_COLOR << "No CUDA devices found" << RESET_COLOR << std::endl;
         return 1;
     }
 
-    // Initialize the Logger
-    Logger logger;
+    // Set the first CUDA device
+    if (cudaSetDevice(0) != cudaSuccess) {
+        std::cerr << RED_COLOR << "Failed to set CUDA device" << RESET_COLOR << std::endl;
+        return 1;
+    }
 
-    // Handle 'convert' mode
-    if (mode == "convert") {
-        try {
-            // Initialize YOLOv11 with the ONNX model path
-            YOLOv12 yolov12(onnxPath, logger);
-            std::cout << GREEN_COLOR << "Model conversion successful. Engine saved." << RESET_COLOR << std::endl;
-        }
-        catch (const std::exception& e) {
-            std::cerr << RED_COLOR << "Error during model conversion: " << e.what() << RESET_COLOR << std::endl;
+    try {
+        // Verify that the engine file exists
+        std::ifstream engineFile(enginePath, std::ios::binary);
+        if (!engineFile.good()) {
+            std::cerr << RED_COLOR << "Engine file not found: " << enginePath 
+                      << RESET_COLOR << std::endl;
             return 1;
         }
-    }
-    // Handle inference modes
-    else if (mode == "infer_video" || mode == "infer_image") {
+        engineFile.close();
+
+        // Initialize YOLOv12 model via smart pointer
+        std::unique_ptr<YOLOv12> yolov12;
         try {
-            // Initialize YOLOv11 with the TensorRT engine path
-            YOLOv12 yolov12(enginePath, logger);
+            yolov12 = std::make_unique<YOLOv12>(enginePath, logger);
+        } catch (const std::exception& e) {
+            std::cerr << RED_COLOR << "YOLOv12 initialization failed: " << e.what() 
+                      << RESET_COLOR << std::endl;
+            return 1;
+        }
+        std::cout << GREEN_COLOR << "Model loaded successfully" << RESET_COLOR << std::endl;
 
-            if (mode == "infer_video") {
-                // Open the video file
-                cv::VideoCapture cap(inputPath);
-                if (!cap.isOpened()) {
-                    std::cerr << RED_COLOR << "Failed to open video file: " << inputPath << RESET_COLOR << std::endl;
-                    return 1;
+        // Configure the camera
+        cv::VideoCapture cap;
+        cap.set(cv::CAP_PROP_BUFFERSIZE, 3);
+        if (!cap.open(cameraId)) {
+            std::cerr << RED_COLOR << "Failed to open camera " << cameraId 
+                      << RESET_COLOR << std::endl;
+            return 1;
+        }
+
+        // Set camera properties
+        cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
+        cap.set(cv::CAP_PROP_FPS, 30);
+
+        // Test the camera by reading an initial frame
+        cv::Mat testFrame;
+        if (!cap.read(testFrame) || testFrame.empty()) {
+            std::cerr << RED_COLOR << "Failed to read initial frame" << RESET_COLOR << std::endl;
+            return 1;
+        }
+        std::cout << GREEN_COLOR << "Camera initialized successfully" << RESET_COLOR << std::endl;
+
+        // Prepare threading resources for frame capture
+        std::mutex frameMutex;
+        std::condition_variable frameCV;
+        cv::Mat sharedFrame;
+        std::atomic<bool> running{true};
+
+        // Start the capture thread to continuously read frames
+        std::thread captureThread([&]() {
+            cv::Mat temp;
+            while (running) {
+                if (cap.read(temp)) {
+                    std::lock_guard<std::mutex> lock(frameMutex);
+                    temp.copyTo(sharedFrame);
+                    frameCV.notify_one();
+                } else {
+                    std::cout << YELLOW_COLOR << "Camera read failure" 
+                              << RESET_COLOR << std::endl;
+                    running = false;
                 }
-
-                // Prepare video writer to save the output (optional)
-                std::string outputVideoPath = "output_video.avi";
-                int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
-                int frame_height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
-                cv::VideoWriter video(outputVideoPath, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 30,
-                    cv::Size(frame_width, frame_height));
-
-                cv::Mat frame;
-                while (cap.read(frame)) {
-                    // Preprocess the frame
-                    yolov12.preprocess(frame);
-
-                    // Perform inference
-                    yolov12.infer();
-
-                    // Postprocess to get detections
-                    std::vector<Detection> detections;
-                    yolov12.postprocess(detections);
-
-                    // Draw detections on the frame
-                    yolov12.draw(frame, detections);
-
-                    // Display the frame (optional)
-                    cv::imshow("Inference", frame);
-                    if (cv::waitKey(1) == 27) { // Exit on 'ESC' key
-                        break;
-                    }
-
-                    // Write the frame to the output video
-                    video.write(frame);
-                }
-
-                cap.release();
-                video.release();
-                cv::destroyAllWindows();
-                std::cout << GREEN_COLOR << "Video inference completed. Output saved to "
-                    << outputVideoPath << RESET_COLOR << std::endl;
             }
-            else if (mode == "infer_image") {
-                // Read the image
-                cv::Mat image = cv::imread(inputPath);
-                if (image.empty()) {
-                    std::cerr << RED_COLOR << "Failed to read image: " << inputPath << RESET_COLOR << std::endl;
-                    return 1;
+        });
+
+        // Main processing loop
+        while (running) {
+            cv::Mat frame;
+            {
+                std::unique_lock<std::mutex> lock(frameMutex);
+                if (!frameCV.wait_for(lock, std::chrono::milliseconds(30),
+                    [&]() { return !sharedFrame.empty(); })) {
+                    continue;
                 }
+                sharedFrame.copyTo(frame);
+            }
+            if (frame.empty()) continue;
 
-                // Preprocess the image
-                yolov12.preprocess(image);
+            try {
+                auto start = std::chrono::steady_clock::now();
 
-                // Perform inference
-                yolov12.infer();
-
-                // Postprocess to get detections
+                // Run the inference pipeline
+                yolov12->preprocess(frame);
+                yolov12->infer();
                 std::vector<Detection> detections;
-                yolov12.postprocess(detections);
+                yolov12->postprocess(detections);
 
-                // Draw detections on the image
-                yolov12.draw(image, detections);
+                // Debug log: print number of detections
+                std::cout << "[DEBUG] Number of detections: " << detections.size() << std::endl;
 
-                // Display the image (optional)
-                cv::imshow("Inference", image);
-                cv::waitKey(0); // Wait indefinitely until a key is pressed
+                // If no detections, add a text indication
+                if (detections.empty()) {
+                    cv::putText(frame, "No detections", cv::Point(10,50),
+                        cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0,0,255), 2);
+                }
 
-                // Save the output image
-                std::string outputImagePath = "output_image.jpg";
-                cv::imwrite(outputImagePath, image);
-                std::cout << GREEN_COLOR << "Image inference completed. Output saved to "
-                    << outputImagePath << RESET_COLOR << std::endl;
+                // Draw bounding boxes with labels using CLASS_NAMES and COLORS from common.h
+                for (const auto& det : detections) {
+                    int clsID = det.class_id;
+                    if (clsID < 0 || clsID >= (int)CLASS_NAMES.size())
+                        continue;
+                    // Use modulo in case there are more classes than colors
+                    const auto& color = COLORS[clsID % COLORS.size()];
+                    // OpenCV expects colors in BGR order (we stored them in RGB)
+                    cv::rectangle(frame, det.bbox, 
+                        cv::Scalar(color[2], color[1], color[0]), 2);
+                    
+                    std::string label = CLASS_NAMES[clsID] + " " + 
+                        std::to_string(static_cast<int>(det.conf * 100)) + "%";
+                    int baseline = 0;
+                    cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+                    cv::Point labelOrigin(det.bbox.x, det.bbox.y - 5);
+
+                    // Draw filled rectangle as label background
+                    cv::rectangle(frame, 
+                        cv::Point(labelOrigin.x, labelOrigin.y - labelSize.height),
+                        cv::Point(labelOrigin.x + labelSize.width, labelOrigin.y + baseline),
+                        cv::Scalar(color[2], color[1], color[0]), cv::FILLED);
+                    // Draw the label text in white
+                    cv::putText(frame, label, labelOrigin, cv::FONT_HERSHEY_SIMPLEX, 0.5, 
+                        cv::Scalar(255, 255, 255), 1);
+                }
+                
+                auto end = std::chrono::steady_clock::now();
+                float fps = 1000.0f / std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                cv::putText(frame, "FPS: " + std::to_string(static_cast<int>(fps)),
+                    cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
+                
+                cv::imshow("YOLOv12 Real-time Detection", frame);
+            } catch (const std::exception& e) {
+                std::cerr << RED_COLOR << "Inference error: " << e.what() 
+                          << RESET_COLOR << std::endl;
+                running = false;
+                continue;
             }
+
+            if (cv::waitKey(1) == 'q')
+                running = false;
         }
-        catch (const std::exception& e) {
-            std::cerr << RED_COLOR << "Error during inference: " << e.what() << RESET_COLOR << std::endl;
-            return 1;
-        }
+
+        // Cleanup
+        running = false;
+        captureThread.join();
+        cap.release();
+        cv::destroyAllWindows();
+
+    } catch (const std::exception& e) {
+        std::cerr << RED_COLOR << "Error: " << e.what() 
+                  << RESET_COLOR << std::endl;
+        return 1;
     }
 
+    // CUDA cleanup
+    cudaDeviceReset();
     return 0;
 }
