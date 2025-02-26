@@ -27,6 +27,7 @@ set(SOURCES
     main.cpp
     src/YOLOv12.cpp
     src/preprocess.cu
+    src/videocap.cpp
 )
 
 # Create executable

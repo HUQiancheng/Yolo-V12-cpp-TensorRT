@@ -216,8 +216,8 @@ void YOLOv12::postprocess(vector<Detection> &output)
 void YOLOv12::build(std::string onnxPath, nvinfer1::ILogger &logger)
 {
     auto builder = createInferBuilder(logger);
-    const auto explicitBatch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
-    INetworkDefinition *network = builder->createNetworkV2(explicitBatch);
+    const auto flags = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kSTRONGLY_TYPED);
+    INetworkDefinition *network = builder->createNetworkV2(flags);
     IBuilderConfig *config = builder->createBuilderConfig();
 
     if (isFP16)
