@@ -79,7 +79,7 @@ The **YOLOv12 C++ TensorRT Project** is a high-performance object detection solu
 
 To convert an ONNX model to a TensorRT engine file, use the following command:
 
-    ./YOLOv12TRT convert path_to_your_model.onnx path_to_your_engine.engine.
+    ./YOLOv12TRT convert path_to_your_model.onnx path_to_your_engine.engine .
         
 path_to_your_model.onnx: Path to the ONNX model file.
 

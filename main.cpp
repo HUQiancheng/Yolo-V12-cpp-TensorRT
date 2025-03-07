@@ -17,7 +17,7 @@
 
 #include <iostream>
 #include <string>
-#include "yolov12.h"
+#include "YOLOv12.h"
 
 
 

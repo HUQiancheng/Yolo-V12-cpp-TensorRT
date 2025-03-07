@@ -3,81 +3,75 @@
 # Project declaration with C++ and CUDA support
 project(YOLOv12TRT LANGUAGES CXX CUDA)
 
-# Set C++ standard to C++17
+# Set C++ standard and compiler options
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Define the path to TensorRT installation
-set(TENSORRT_PATH "F:/Program Files/TensorRT-8.6.1.6")  # Update this to the actual path for TensorRT
+# Define paths (更新TensorRT路径为系统安装位置)
+set(TENSORRT_PATH "/usr" CACHE PATH "Path to TensorRT installation")
+# 如果OpenCV安装在系统默认路径，可以不显式设定OpenCV_DIR
+# set(OpenCV_DIR "/usr/include/opencv4" CACHE PATH "Path to OpenCV installation")
 
-# Define the path to OpenCV installation
-
-# Allow overriding TensorRT and OpenCV paths via command line
-# e.g., cmake -DTENSORRT_PATH="path/to/TensorRT" -DOpenCV_DIR="path/to/OpenCV" ..
-option(TENSORRT_PATH_OPTION "Path to TensorRT installation" ${TENSORRT_PATH})
-set(TENSORRT_PATH ${TENSORRT_PATH_OPTION} CACHE PATH "Path to TensorRT installation")
-
-# Set OpenCV root directory
-set(OpenCV_DIR "F:/Program Files (x86)/opencv-4.10.0-windows/opencv/build")
+# Find required packages
 find_package(OpenCV REQUIRED)
-
-# Find CUDA
 find_package(CUDA REQUIRED)
+
 if(NOT CUDA_FOUND)
-    message(FATAL_ERROR "CUDA not found. Please install the CUDA Toolkit.")
+    message(FATAL_ERROR "CUDA not found. Please install CUDA Toolkit.")
 endif()
 
-# Include directories for TensorRT
-include_directories(${TENSORRT_PATH}/include)
-
-# Include directory for your project
-include_directories(${CMAKE_SOURCE_DIR}/include)
-
-# Define source files (including CUDA sources)
+# Define source files
 set(SOURCES
     main.cpp
-    src/yolov12.cpp
+    src/YOLOv12.cpp
     src/preprocess.cu
 )
 
-# Create executable (CMake handles CUDA sources automatically)
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+# Create executable
+add_executable(${PROJECT_NAME} ${SOURCES})
 
-# Define API_EXPORTS macro
+# Define compile definitions
 target_compile_definitions(${PROJECT_NAME} PRIVATE API_EXPORTS)
 
-# Specify include directories (modern CMake approach)
-target_include_directories(${PROJECT_NAME} PRIVATE
-    src/
-    ${OpenCV_INCLUDE_DIRS}
-    ${CUDA_INCLUDE_DIRS}
+# Set include directories
+target_include_directories(${PROJECT_NAME} PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
     ${TENSORRT_PATH}/include
+    ${CUDA_INCLUDE_DIRS}
+    ${OpenCV_INCLUDE_DIRS}
 )
 
-# Link TensorRT libraries
-# Specify full paths to TensorRT libraries to avoid relying on link_directories
+# Set TensorRT libraries (按Orin NX平台的目录)
 set(TENSORRT_LIBS
-    "${TENSORRT_PATH}/lib/nvinfer.lib"
-    "${TENSORRT_PATH}/lib/nvonnxparser.lib"
-    "${TENSORRT_PATH}/lib/nvparsers.lib"
-    "${TENSORRT_PATH}/lib/nvinfer_plugin.lib"
+    "${TENSORRT_PATH}/lib/aarch64-linux-gnu/libnvinfer.so"
+    "${TENSORRT_PATH}/lib/aarch64-linux-gnu/libnvonnxparser.so"
+    "${TENSORRT_PATH}/lib/aarch64-linux-gnu/libnvinfer_plugin.so"
+    # 如果不需要特定版本链接，这里可以注释掉：
+    # "${TENSORRT_PATH}/lib/aarch64-linux-gnu/libnvinfer_builder_resource.so"
 )
 
-# Link libraries to the target
+# Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${OpenCV_LIBS}
     ${CUDA_LIBRARIES}
     ${TENSORRT_LIBS}
 )
 
-# Enable separable compilation for CUDA (optional but recommended)
+# CUDA specific settings: 开启分离编译并设置正确的CUDA计算能力
 set_target_properties(${PROJECT_NAME} PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
+    CMAKE_CUDA_ARCHITECTURES 87   # 修改为Orin NX的计算能力，比如8.7
 )
 
-# (Optional) Specify CUDA architectures based on your GPU hardware
-# set(CMAKE_CUDA_ARCHITECTURES 75)  # Example for Turing architecture
+# Output directories
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# (Optional) Set output directories for binaries
-# set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+# Add TensorRT runtime path to RPATH
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "${TENSORRT_PATH}/lib/aarch64-linux-gnu"
+)
