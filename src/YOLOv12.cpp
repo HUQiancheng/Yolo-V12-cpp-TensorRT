@@ -19,7 +19,7 @@
 
 
 static Logger logger;
-#define isFP16 true
+#define isFP16 true  // 设置为true以启用FP16
 #define warmup true
 
 
@@ -192,29 +192,36 @@ void YOLOv12::postprocess(vector<Detection>& output){
 
 void YOLOv12::build(std::string onnxPath, nvinfer1::ILogger& logger){
     auto builder = createInferBuilder(logger);
-    const auto explicitBatch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kSTRONGLY_TYPED);
-    INetworkDefinition* network = builder->createNetworkV2(explicitBatch);
+    
+    // 在TensorRT 10.0中，不再需要显式指定批处理，直接使用0表示无特殊标志
+    INetworkDefinition* network = builder->createNetworkV2(0);
     IBuilderConfig* config = builder->createBuilderConfig();
     
+    // 只有在需要启用FP16时设置
     if (isFP16){
+        // 简单打印信息而不添加额外检查
+        std::cout << "Attempting to enable FP16 mode for better performance." << std::endl;
         config->setFlag(BuilderFlag::kFP16);
     }
-
+    
+    // 解析ONNX模型
     nvonnxparser::IParser* parser = nvonnxparser::createParser(*network, logger);
     bool parsed = parser->parseFromFile(onnxPath.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kINFO));
+    
+    // 构建序列化网络
     IHostMemory* plan{ builder->buildSerializedNetwork(*network, *config) };
-
+    
     runtime = createInferRuntime(logger);
-
     engine = runtime->deserializeCudaEngine(plan->data(), plan->size());
-
     context = engine->createExecutionContext();
 
+    // 释放资源
     delete network;
     delete config;
     delete parser;
     delete plan;
 }
+
 
 bool YOLOv12::saveEngine(const std::string& onnxpath){
     // Create an engine path from onnx path
