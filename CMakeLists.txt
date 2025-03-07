@@ -1,77 +1,88 @@
 ﻿cmake_minimum_required(VERSION 3.18)
 
-# Project declaration with C++ and CUDA support
+# 项目声明，支持C++和CUDA
 project(YOLOv12TRT LANGUAGES CXX CUDA)
 
-# Set C++ standard and compiler options
+# 设置C++标准和编译器选项
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Define paths (更新TensorRT路径为系统安装位置)
-set(TENSORRT_PATH "/usr" CACHE PATH "Path to TensorRT installation")
-# 如果OpenCV安装在系统默认路径，可以不显式设定OpenCV_DIR
-# set(OpenCV_DIR "/usr/include/opencv4" CACHE PATH "Path to OpenCV installation")
+# 根据调试结果设置正确的路径
+set(TENSORRT_PATH "/usr/lib/aarch64-linux-gnu" CACHE PATH "Path to TensorRT libraries")
+set(TENSORRT_INCLUDE_PATH "/usr/include/aarch64-linux-gnu" CACHE PATH "Path to TensorRT headers")
+set(OpenCV_DIR "/usr/lib/cmake/opencv4" CACHE PATH "Path to OpenCV CMake files")
 
-# Find required packages
+# 寻找必要的包
 find_package(OpenCV REQUIRED)
 find_package(CUDA REQUIRED)
 
+# 验证CUDA安装
 if(NOT CUDA_FOUND)
-    message(FATAL_ERROR "CUDA not found. Please install CUDA Toolkit.")
+    message(FATAL_ERROR "CUDA not found. Please check JetPack installation.")
 endif()
 
-# Define source files
+# 定义源文件
 set(SOURCES
     main.cpp
     src/YOLOv12.cpp
     src/preprocess.cu
 )
 
-# Create executable
+# 创建可执行文件
 add_executable(${PROJECT_NAME} ${SOURCES})
 
-# Define compile definitions
-target_compile_definitions(${PROJECT_NAME} PRIVATE API_EXPORTS)
+# 定义编译宏
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    API_EXPORTS
+)
 
-# Set include directories
+# 设置包含目录
 target_include_directories(${PROJECT_NAME} PUBLIC
     ${CMAKE_SOURCE_DIR}/include
-    ${TENSORRT_PATH}/include
+    ${TENSORRT_INCLUDE_PATH}
     ${CUDA_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
 )
 
-# Set TensorRT libraries (按Orin NX平台的目录)
+# 设置TensorRT库（移除不存在的libnvparsers.so）
 set(TENSORRT_LIBS
-    "${TENSORRT_PATH}/lib/aarch64-linux-gnu/libnvinfer.so"
-    "${TENSORRT_PATH}/lib/aarch64-linux-gnu/libnvonnxparser.so"
-    "${TENSORRT_PATH}/lib/aarch64-linux-gnu/libnvinfer_plugin.so"
-    # 如果不需要特定版本链接，这里可以注释掉：
-    # "${TENSORRT_PATH}/lib/aarch64-linux-gnu/libnvinfer_builder_resource.so"
+    "${TENSORRT_PATH}/libnvinfer.so"
+    "${TENSORRT_PATH}/libnvonnxparser.so"
+    "${TENSORRT_PATH}/libnvinfer_plugin.so" 
 )
 
-# Link libraries
+# 检查builder_resource库是否存在
+if(EXISTS "${TENSORRT_PATH}/libnvinfer_builder_resource.so.10.3.0")
+    list(APPEND TENSORRT_LIBS "${TENSORRT_PATH}/libnvinfer_builder_resource.so.10.3.0")
+endif()
+
+# 链接库
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${OpenCV_LIBS}
     ${CUDA_LIBRARIES}
     ${TENSORRT_LIBS}
+    cuda
+    cudart
 )
 
-# CUDA specific settings: 开启分离编译并设置正确的CUDA计算能力
+# CUDA特定设置
 set_target_properties(${PROJECT_NAME} PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
-    CMAKE_CUDA_ARCHITECTURES 87   # 修改为Orin NX的计算能力，比如8.7
 )
 
-# Output directories
+# 设置CUDA架构（Jetson Orin NX使用Ampere架构，对应compute capability 8.7）
+set(CMAKE_CUDA_ARCHITECTURES 87)
+
+# 输出目录
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# Add TensorRT runtime path to RPATH
+# 添加TensorRT运行时路径到RPATH
 set_target_properties(${PROJECT_NAME} PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "${TENSORRT_PATH}/lib/aarch64-linux-gnu"
+    INSTALL_RPATH "${TENSORRT_PATH}"
 )
+

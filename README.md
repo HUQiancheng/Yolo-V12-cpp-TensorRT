@@ -68,18 +68,18 @@ The **YOLOv12 C++ TensorRT Project** is a high-performance object detection solu
     make -j$(nproc)
 ## 🚀 Usage
 
-### Convert Yolov12 To ONNX Model
+### Convert Yolov12 To ONNX Model(better don't try on edge devices)
     from ultralytics import YOLO
-    Load the YOLO model
+    # Load the YOLO model
     model = YOLO("yolo12n.pt")
     #Export the model to ONNX format
     export_path = model.export(format="onnx")
 
-### Convert ONNX Model to TensorRT Engine
+### Convert ONNX Model to TensorRT Engine(on edge devices)
 
 To convert an ONNX model to a TensorRT engine file, use the following command:
 
-    ./YOLOv12TRT convert path_to_your_model.onnx path_to_your_engine.engine .
+    ./build/YOLOv12TRT convert path_to_your_model.onnx path_to_your_engine.engine . # Do not miss the dot .
         
 path_to_your_model.onnx: Path to the ONNX model file.
 
@@ -88,7 +88,7 @@ path_to_your_engine.engine: Path where the TensorRT engine file will be saved.
 ### Run Inference on Video
 To run inference on a video, use the following command:
 
-    ./YOLOv12TRT infer_video path_to_your_video.mp4 path_to_your_engine.engine
+    ./build/YOLOv12TRT infer_video path_to_your_video.mp4 path_to_your_engine.engine
 
 path_to_your_video.mp4: Path to the input video file.
 
@@ -98,7 +98,7 @@ path_to_your_engine.engine: Path to the TensorRT engine file.
 Run Inference on Image
 To run inference on an image, use the following command:
 
-    ./YOLOv12TRT infer_image path_to_your_image.jpg path_to_your_engine.engine
+    ./build/YOLOv12TRT infer_image path_to_your_image.jpg path_to_your_engine.engine
     
 path_to_your_image.jpg: Path to the input image file.
 
